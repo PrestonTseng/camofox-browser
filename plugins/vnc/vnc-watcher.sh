@@ -52,6 +52,16 @@ while true; do
     }
   ' | head -1)
 
+  # Newer Xvfb launches can use -displayfd instead of a literal :N arg.
+  # Fall back to the active X11 socket so x11vnc still attaches.
+  if [ -z "$FOUND" ]; then
+    for sock in /tmp/.X11-unix/X*; do
+      [ -S "$sock" ] || continue
+      FOUND=":${sock##*/X}"
+      break
+    done
+  fi
+
   if [ -n "$FOUND" ] && [ "$FOUND" != "$CURRENT_DISPLAY" ]; then
     # New or changed display -- (re)attach x11vnc
     if [ -n "$X11VNC_PID" ] && kill -0 "$X11VNC_PID" 2>/dev/null; then
@@ -60,10 +70,9 @@ while true; do
       sleep 0.5
     fi
 
-    CURRENT_DISPLAY="$FOUND"
-    log "Attaching x11vnc to DISPLAY=$CURRENT_DISPLAY"
+    log "Attaching x11vnc to DISPLAY=$FOUND"
 
-    X11VNC_ARGS="-display $CURRENT_DISPLAY -forever -shared -rfbport $VNC_PORT -noxdamage -quiet -bg -o /var/log/x11vnc.log"
+    X11VNC_ARGS="-display $FOUND -forever -shared -rfbport $VNC_PORT -noxdamage -quiet -bg -o /var/log/x11vnc.log"
     [ "${VIEW_ONLY:-0}" = "1" ] && X11VNC_ARGS="$X11VNC_ARGS -viewonly"
     if [ -n "$PASSFILE" ]; then
       X11VNC_ARGS="$X11VNC_ARGS -rfbauth $PASSFILE"
@@ -72,8 +81,14 @@ while true; do
     fi
 
     # shellcheck disable=SC2086
-    x11vnc $X11VNC_ARGS
+    if ! x11vnc $X11VNC_ARGS; then
+      log "x11vnc failed to attach to DISPLAY=$FOUND; will retry"
+      sleep 1
+      continue
+    fi
+
     sleep 1
+    CURRENT_DISPLAY="$FOUND"
     X11VNC_PID=$(pgrep -f "x11vnc.*-display $CURRENT_DISPLAY" | head -1)
     log "x11vnc running (pid=$X11VNC_PID) on DISPLAY=$CURRENT_DISPLAY"
   fi
